@@ -27,4 +27,9 @@ http://localhost:8080/https%3A%2F%2Fwheresyoured.at%2Ffeed
 - [ ] Download images, and include into the epub outpub
 - [ ] Ability to download content from URL, for feeds that don't include the
 full content
+- [ ] Parse sections from content, split into sections and subsections in the
+epub
+- [ ] Handle errors
+- [ ] Better html -> xhtml conversion
+- [ ] Cover images
 - [ ] ???

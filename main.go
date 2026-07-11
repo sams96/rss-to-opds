@@ -52,6 +52,16 @@ func feed(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "%s", string(j))
 }
 
+func fullContent(s *goquery.Selection) string {
+	var htmlBuilder strings.Builder
+	s.Each(func(_ int, s *goquery.Selection) {
+		nodeHTML, _ := goquery.OuterHtml(s)
+		htmlBuilder.WriteString(nodeHTML)
+	})
+
+	return htmlBuilder.String()
+}
+
 func download(w http.ResponseWriter, r *http.Request) {
 	url := r.PathValue("url")
 	fp := gofeed.NewParser()
@@ -70,16 +80,29 @@ func download(w http.ResponseWriter, r *http.Request) {
 	}
 
 	doc.Find("br").Remove()
-	content, err := doc.Html()
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	e := epub.NewEpub(item.Title)
 	e.SetAuthor(item.Authors[0].Name)
-	e.AddSection(content, "", "firstsection.html", "")
 
-	fmt.Println(content)
+	h1s := doc.Find("h1")
+	if h1s.Length() == 0 {
+		entireDoc := doc.Find("body").Children()
+		if entireDoc.Length() > 0 {
+			e.AddSection(fullContent(entireDoc), item.Title, "", "")
+		}
+	} else {
+		firstH1 := h1s.First()
+		introSection := firstH1.PrevAll()
+		if introSection.Length() > 0 {
+			e.AddSection(fullContent(introSection), "Introduction", "", "")
+		}
+	}
+
+	h1s.Each(func(i int, h1 *goquery.Selection) {
+		nextH1 := h1.NextAllFiltered("h1").First()
+		section := h1.AddSelection(h1.NextUntilSelection(nextH1))
+		e.AddSection(fullContent(section), h1.Text(), "", "")
+	})
 
 	pw := bufio.NewWriterSize(w, 10<<16)
 

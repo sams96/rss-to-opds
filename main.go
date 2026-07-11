@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -17,9 +18,9 @@ import (
 )
 
 func feed(w http.ResponseWriter, r *http.Request) {
-	url := r.PathValue("url")
+	feedURL := r.PathValue("url")
 	fp := gofeed.NewParser()
-	feed, _ := fp.ParseURL(url)
+	feed, _ := fp.ParseURL(feedURL)
 
 	opds := opds1.Feed{
 		ID:      uuid.NewString(),
@@ -36,7 +37,7 @@ func feed(w http.ResponseWriter, r *http.Request) {
 				{
 					Rel:      "http://opds-spec.org/acquisition/buy",
 					TypeLink: "application/epub+zip",
-					Href:     fmt.Sprintf("/%s/download/%s", url, item.GUID),
+					Href:     fmt.Sprintf("/%s/download/%s", url.QueryEscape(feedURL), item.GUID),
 				},
 			},
 		}

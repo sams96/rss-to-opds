@@ -10,8 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sams96/rss-to-opds/epub"
+
 	"github.com/PuerkitoBio/goquery"
-	"github.com/bmaupin/go-epub"
 	"github.com/google/uuid"
 	"github.com/mmcdole/gofeed"
 	"github.com/opds-community/libopds2-go/opds1"
@@ -37,7 +38,7 @@ func feed(w http.ResponseWriter, r *http.Request) {
 				{
 					Rel:      "http://opds-spec.org/acquisition/buy",
 					TypeLink: "application/epub+zip",
-					Href:     fmt.Sprintf("/%s/download/%s", url.QueryEscape(feedURL), item.GUID),
+					Href:     fmt.Sprintf("/%s/download/%s", url.QueryEscape(feedURL), url.QueryEscape(item.GUID)),
 				},
 			},
 		}
@@ -63,45 +64,57 @@ func fullContent(s *goquery.Selection) string {
 }
 
 func download(w http.ResponseWriter, r *http.Request) {
-	url := r.PathValue("url")
+	feedURL := r.PathValue("url")
 	fp := gofeed.NewParser()
-	feed, _ := fp.ParseURL(url)
+	feed, _ := fp.ParseURL(feedURL)
 
-	item := &gofeed.Item{}
+	var item *gofeed.Item
 	for _, i := range feed.Items {
 		if i.GUID == r.PathValue("id") {
 			item = i
 		}
 	}
+	if item == nil {
+		log.Fatal("no item")
+	}
 
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(item.Content))
+	content := item.Content
+	if len(content) == 0 {
+		content = item.Description
+	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(content))
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	doc.Find("br").Remove()
 
-	e := epub.NewEpub(item.Title)
-	e.SetAuthor(item.Authors[0].Name)
+	e, err := epub.NewEpub(item.Title)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(item.Authors) > 0 {
+		e.SetAuthor(item.Authors[0].Name)
+	}
 
 	h1s := doc.Find("h1")
 	if h1s.Length() == 0 {
 		entireDoc := doc.Find("body").Children()
 		if entireDoc.Length() > 0 {
-			e.AddSection(fullContent(entireDoc), item.Title, "", "")
+			e.AddSection(fullContent(entireDoc), item.Title)
 		}
 	} else {
 		firstH1 := h1s.First()
 		introSection := firstH1.PrevAll()
 		if introSection.Length() > 0 {
-			e.AddSection(fullContent(introSection), "Introduction", "", "")
+			e.AddSection(fullContent(introSection), "Introduction")
 		}
 	}
 
 	h1s.Each(func(i int, h1 *goquery.Selection) {
 		nextH1 := h1.NextAllFiltered("h1").First()
 		section := h1.AddSelection(h1.NextUntilSelection(nextH1))
-		e.AddSection(fullContent(section), h1.Text(), "", "")
+		e.AddSection(fullContent(section), h1.Text())
 	})
 
 	pw := bufio.NewWriterSize(w, 10<<16)

@@ -20,12 +20,7 @@ type Epub struct {
 	// The key is the font filename, the value is the font source
 	// fonts      map[string]string
 	identifier string
-	// The key is the image filename, the value is the image source
-	// images map[string]string
-	// The key is the video filename, the value is the video source
-	// videos map[string]string
-	// The key is the audio filename, the value is the audio source
-	// audios map[string]string
+	media      []*epubMedia
 	// Language
 	lang string
 	// Description
@@ -44,6 +39,12 @@ type epubSection struct {
 	filename string
 	xhtml    *xhtml
 	children []*epubSection
+}
+
+type epubMedia struct {
+	filename  string
+	mediaType string
+	src       io.Reader
 }
 
 const (
@@ -134,7 +135,7 @@ const (
 `
 	// This seems to be the standard based on the latest EPUB spec:
 	// http://www.idpf.org/epub/31/spec/epub-ocf.html
-	contentFolderName    = "EPUB"
+	contentFolderName    = "OPBPS"
 	coverImageProperties = "cover-image"
 	// Permissions for any new directories we create
 	dirPermissions = 0755
@@ -201,20 +202,43 @@ func (e *Epub) writeSections(w *zip.Writer) error {
 		// section.xhtml.setTitle(e.Title())
 		// }
 
-		sectionFilePath := filepath.Join(contentFolderName, xhtmlFolderName, section.filename)
+		sectionFilePath := filepath.Join(contentFolderName, section.filename)
 		dst, _ := w.Create(sectionFilePath)
 		err := section.xhtml.write(dst)
 		if err != nil {
 			return err
 		}
 
-		relativePath := filepath.Join(xhtmlFolderName, section.filename)
+		relativePath := filepath.Join(section.filename)
 		// if section.filename != e.cover.xhtmlFilename {
 		// e.pkg.addToSpine(section.filename)
 		// }
 		e.pkg.addToSpine(section.filename)
 		e.pkg.addToManifest(section.filename, relativePath, "application/xhtml+xml", "")
 		e.toc.addSubSection("-1", 0, section.xhtml.Title(), relativePath)
+	}
+
+	return nil
+}
+
+func (e *Epub) writeMedia(w *zip.Writer) error {
+	for _, file := range e.media {
+		dst, err := w.Create(filepath.Join(contentFolderName, file.filename))
+		if err != nil {
+			return err
+		}
+
+		_, err = io.Copy(dst, file.src)
+		if err != nil {
+			return err
+		}
+
+		xmlId, err := fixXMLId(file.filename)
+		if err != nil {
+			return err
+		}
+
+		e.pkg.addToManifest(xmlId, file.filename, file.mediaType, "")
 	}
 
 	return nil
@@ -234,6 +258,14 @@ func (e *Epub) WriteTo(w io.Writer) (int64, error) {
 	}
 
 	err = e.writeSections(dst)
+	if err != nil {
+		return 0, err
+	}
+
+	err = e.writeMedia(dst)
+	if err != nil {
+		return 0, err
+	}
 
 	err = e.writeTOC(dst)
 	if err != nil {
@@ -265,4 +297,8 @@ func (e *Epub) AddSection(body, sectionTitle string) (string, error) {
 			children: nil,
 		})
 	return internalFilename, nil
+}
+
+func (e *Epub) AddMedia(src io.Reader, filename, mediaType string) {
+	e.media = append(e.media, &epubMedia{filename, mediaType, src})
 }

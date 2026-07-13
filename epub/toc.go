@@ -215,7 +215,7 @@ func (t *toc) setTitle(title string) {
 
 // Write the TOC files
 func (t *toc) write(w *zip.Writer) error {
-	navFilePath := filepath.Join("EPUB", tocNavFilename)
+	navFilePath := filepath.Join(contentFolderName, tocNavFilename)
 	writer, err := w.Create(navFilePath)
 	if err != nil {
 		return err

@@ -97,6 +97,25 @@ func download(w http.ResponseWriter, r *http.Request) {
 		e.SetAuthor(item.Authors[0].Name)
 	}
 
+	doc.Find("img").Each(func(_ int, img *goquery.Selection) {
+		src, _ := img.Attr("src")
+		if !strings.HasPrefix(src, "http") {
+			return
+		}
+
+		resp, err := http.Get(src)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		path := strings.Split(src, "/")
+		filename := path[len(path)-1]
+		e.AddMedia(resp.Body, filename, resp.Header.Get("Content-Type"))
+
+		img.SetAttr("src", filename)
+	})
+
 	h1s := doc.Find("h1")
 	if h1s.Length() == 0 {
 		entireDoc := doc.Find("body").Children()

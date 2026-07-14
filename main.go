@@ -1,18 +1,20 @@
 package main
 
 import (
-	"bufio"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/sams96/rss-to-opds/epub"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/davidbyttow/govips/v2/vips"
 	"github.com/google/uuid"
 	"github.com/mmcdole/gofeed"
 	"github.com/opds-community/libopds2-go/opds1"
@@ -63,6 +65,12 @@ func fullContent(s *goquery.Selection) string {
 	return htmlBuilder.String()
 }
 
+func replaceExt(filename, newExt string) string {
+	ext := filepath.Ext(filename)
+	name := strings.TrimSuffix(filename, ext)
+	return name + newExt
+}
+
 func download(w http.ResponseWriter, r *http.Request) {
 	feedURL := r.PathValue("url")
 	fp := gofeed.NewParser()
@@ -110,8 +118,14 @@ func download(w http.ResponseWriter, r *http.Request) {
 		}
 
 		path := strings.Split(src, "/")
-		filename := path[len(path)-1]
-		e.AddMedia(resp.Body, filename, resp.Header.Get("Content-Type"))
+		filename := url.PathEscape(replaceExt(path[len(path)-1], ".jpeg"))
+		log.Println(path, filename)
+		e.AddMedia(resp.Body, filename, "image/jpeg",
+			func(dst io.Writer, src io.Reader) (int64, error) {
+				return 0, vips.TranscodeStream(src, dst, &vips.TranscodeOptions{
+					Format: vips.ImageTypeJPEG,
+				})
+			})
 
 		img.SetAttr("src", filename)
 	})
@@ -136,18 +150,17 @@ func download(w http.ResponseWriter, r *http.Request) {
 		e.AddSection(fullContent(section), h1.Text())
 	})
 
-	pw := bufio.NewWriterSize(w, 10<<16)
-
 	w.Header().Set("Content-Type", "application/epub+zip")
-	_, err = e.WriteTo(pw)
+	_, err = e.WriteTo(w)
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	pw.Flush()
 }
 
 func main() {
+	vips.Startup(nil)
+	defer vips.Shutdown()
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/{url}", feed)

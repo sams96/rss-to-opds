@@ -41,10 +41,13 @@ type epubSection struct {
 	children []*epubSection
 }
 
+type transcoderFunc func(io.Writer, io.Reader) (int64, error)
+
 type epubMedia struct {
-	filename  string
-	mediaType string
-	src       io.Reader
+	filename   string
+	mediaType  string
+	src        io.Reader
+	transcoder transcoderFunc
 }
 
 const (
@@ -135,7 +138,7 @@ const (
 `
 	// This seems to be the standard based on the latest EPUB spec:
 	// http://www.idpf.org/epub/31/spec/epub-ocf.html
-	contentFolderName    = "OPBPS"
+	contentFolderName    = "EPUB"
 	coverImageProperties = "cover-image"
 	// Permissions for any new directories we create
 	dirPermissions = 0755
@@ -228,7 +231,7 @@ func (e *Epub) writeMedia(w *zip.Writer) error {
 			return err
 		}
 
-		_, err = io.Copy(dst, file.src)
+		_, err = file.transcoder(dst, file.src)
 		if err != nil {
 			return err
 		}
@@ -299,6 +302,6 @@ func (e *Epub) AddSection(body, sectionTitle string) (string, error) {
 	return internalFilename, nil
 }
 
-func (e *Epub) AddMedia(src io.Reader, filename, mediaType string) {
-	e.media = append(e.media, &epubMedia{filename, mediaType, src})
+func (e *Epub) AddMedia(src io.Reader, filename, mediaType string, transcoder transcoderFunc) {
+	e.media = append(e.media, &epubMedia{filename, mediaType, src, transcoder})
 }

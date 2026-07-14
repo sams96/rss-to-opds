@@ -97,7 +97,7 @@ func download(w http.ResponseWriter, r *http.Request) {
 
 	doc.Find("br").Remove()
 
-	e, err := epub.NewEpub(item.Title)
+	e, err := epub.New(item.Title, w)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func download(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/epub+zip")
-	_, err = e.WriteTo(w)
+	_, err = e.Write()
 	if err != nil {
 		log.Fatal(err)
 	}

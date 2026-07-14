@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"sync"
 
 	"github.com/google/uuid"
 )
 
 // Epub implements an EPUB file.
 type Epub struct {
-	sync.Mutex
 	author string
 	// cover  *epubCover
 	// The key is the css filename, the value is the css source
@@ -20,7 +18,6 @@ type Epub struct {
 	// The key is the font filename, the value is the font source
 	// fonts      map[string]string
 	identifier string
-	media      []*epubMedia
 	// Language
 	lang string
 	// Description
@@ -33,6 +30,7 @@ type Epub struct {
 	title    string
 	// Table of contents
 	toc *toc
+	dst *zip.Writer
 }
 
 type epubSection struct {
@@ -55,8 +53,8 @@ const (
 	urnUUIDPrefix   = "urn:uuid:"
 )
 
-// NewEpub returns a new Epub.
-func NewEpub(title string) (*Epub, error) {
+// New starts writing a new epub
+func New(title string, w io.Writer) (*Epub, error) {
 	var err error
 	e := &Epub{}
 	e.pkg, err = newPackage()
@@ -72,6 +70,18 @@ func NewEpub(title string) (*Epub, error) {
 	e.SetLang(defaultEpubLang)
 	e.SetTitle(title)
 
+	e.dst = zip.NewWriter(w)
+
+	err = writeMimetype(e.dst)
+	if err != nil {
+		return nil, err
+	}
+
+	err = writeContainerFile(e.dst)
+	if err != nil {
+		return nil, err
+	}
+
 	return e, nil
 }
 
@@ -79,8 +89,6 @@ func NewEpub(title string) (*Epub, error) {
 // ISBN or ISSN. If no identifier is set, a UUID will be automatically
 // generated.
 func (e *Epub) SetIdentifier(identifier string) {
-	e.Lock()
-	defer e.Unlock()
 	e.identifier = identifier
 	e.pkg.setIdentifier(identifier)
 	e.toc.setIdentifier(identifier)
@@ -88,32 +96,24 @@ func (e *Epub) SetIdentifier(identifier string) {
 
 // SetLang sets the language of the EPUB.
 func (e *Epub) SetLang(lang string) {
-	e.Lock()
-	defer e.Unlock()
 	e.lang = lang
 	e.pkg.setLang(lang)
 }
 
 // SetDescription sets the description of the EPUB.
 func (e *Epub) SetDescription(desc string) {
-	e.Lock()
-	defer e.Unlock()
 	e.desc = desc
 	e.pkg.setDescription(desc)
 }
 
 // SetPpd sets the page progression direction of the EPUB.
 func (e *Epub) SetPpd(direction string) {
-	e.Lock()
-	defer e.Unlock()
 	e.ppd = direction
 	e.pkg.setPpd(direction)
 }
 
 // SetTitle sets the title of the EPUB.
 func (e *Epub) SetTitle(title string) {
-	e.Lock()
-	defer e.Unlock()
 	e.title = title
 	e.pkg.setTitle(title)
 	e.toc.setTitle(title)
@@ -121,8 +121,6 @@ func (e *Epub) SetTitle(title string) {
 
 // SetAuthor sets the author of the EPUB.
 func (e *Epub) SetAuthor(author string) {
-	e.Lock()
-	defer e.Unlock()
 	e.author = author
 	e.pkg.setAuthor(author)
 }
@@ -224,63 +222,23 @@ func (e *Epub) writeSections(w *zip.Writer) error {
 	return nil
 }
 
-func (e *Epub) writeMedia(w *zip.Writer) error {
-	for _, file := range e.media {
-		dst, err := w.Create(filepath.Join(contentFolderName, file.filename))
-		if err != nil {
-			return err
-		}
-
-		_, err = file.transcoder(dst, file.src)
-		if err != nil {
-			return err
-		}
-
-		xmlId, err := fixXMLId(file.filename)
-		if err != nil {
-			return err
-		}
-
-		e.pkg.addToManifest(xmlId, file.filename, file.mediaType, "")
-	}
-
-	return nil
-}
-
-func (e *Epub) WriteTo(w io.Writer) (int64, error) {
-	dst := zip.NewWriter(w)
-
-	err := writeMimetype(dst)
+func (e *Epub) Write() (int64, error) {
+	err := e.writeSections(e.dst)
 	if err != nil {
 		return 0, err
 	}
 
-	err = writeContainerFile(dst)
+	err = e.writeTOC(e.dst)
 	if err != nil {
 		return 0, err
 	}
 
-	err = e.writeSections(dst)
+	err = e.pkg.write(e.dst)
 	if err != nil {
 		return 0, err
 	}
 
-	err = e.writeMedia(dst)
-	if err != nil {
-		return 0, err
-	}
-
-	err = e.writeTOC(dst)
-	if err != nil {
-		return 0, err
-	}
-
-	err = e.pkg.write(dst)
-	if err != nil {
-		return 0, err
-	}
-
-	return 0, dst.Close()
+	return 0, e.dst.Close()
 }
 
 func (e *Epub) AddSection(body, sectionTitle string) (string, error) {
@@ -302,6 +260,22 @@ func (e *Epub) AddSection(body, sectionTitle string) (string, error) {
 	return internalFilename, nil
 }
 
-func (e *Epub) AddMedia(src io.Reader, filename, mediaType string, transcoder transcoderFunc) {
-	e.media = append(e.media, &epubMedia{filename, mediaType, src, transcoder})
+func (e *Epub) AddMedia(src io.Reader, filename, mediaType string, transcoder transcoderFunc) error {
+	dst, err := e.dst.Create(filepath.Join(contentFolderName, filename))
+	if err != nil {
+		return err
+	}
+
+	_, err = transcoder(dst, src)
+	if err != nil {
+		return err
+	}
+
+	xmlId, err := fixXMLId(filename)
+	if err != nil {
+		return err
+	}
+
+	e.pkg.addToManifest(xmlId, filename, mediaType, "")
+	return nil
 }

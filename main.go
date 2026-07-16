@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,10 +22,21 @@ import (
 	"github.com/opds-community/libopds2-go/opds1"
 )
 
-func feed(w http.ResponseWriter, r *http.Request) {
+type handler struct {
+	log *slog.Logger
+}
+
+func (h *handler) feed(w http.ResponseWriter, r *http.Request) {
 	feedURL := r.PathValue("url")
+	log := h.log.With(slog.String("feed", feedURL))
+
 	fp := gofeed.NewParser()
-	feed, _ := fp.ParseURL(feedURL)
+	feed, err := fp.ParseURL(feedURL)
+	if err != nil {
+		log.InfoContext(r.Context(), "failed to parse url", slog.String("error", err.Error()))
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
 	opds := opds1.Feed{
 		ID:      uuid.NewString(),
@@ -49,7 +62,12 @@ func feed(w http.ResponseWriter, r *http.Request) {
 		opds.ItemsPerPage++
 	}
 
-	j, _ := xml.Marshal(opds)
+	j, err := xml.Marshal(opds)
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to marshal xml", slog.String("error", err.Error()))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/atom+xml;profile=opds-catalog;kind=acquisition")
 	fmt.Fprintf(w, "%s", string(j))
@@ -71,19 +89,29 @@ func replaceExt(filename, newExt string) string {
 	return name + newExt
 }
 
-func download(w http.ResponseWriter, r *http.Request) {
+func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	feedURL := r.PathValue("url")
+	id := r.PathValue("id")
+	log := h.log.With(slog.String("feed", feedURL), slog.String("id", id))
+
 	fp := gofeed.NewParser()
-	feed, _ := fp.ParseURL(feedURL)
+	feed, err := fp.ParseURL(feedURL)
+	if err != nil {
+		log.InfoContext(r.Context(), "failed to parse url", slog.String("error", err.Error()))
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
 	var item *gofeed.Item
 	for _, i := range feed.Items {
-		if i.GUID == r.PathValue("id") {
+		if i.GUID == id {
 			item = i
 		}
 	}
 	if item == nil {
-		log.Fatal("no item")
+		log.InfoContext(r.Context(), "No item for id")
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
 
 	content := item.Content
@@ -92,14 +120,18 @@ func download(w http.ResponseWriter, r *http.Request) {
 	}
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(content))
 	if err != nil {
-		log.Fatal(err)
+		log.WarnContext(r.Context(), "failed to parse content", slog.String("error", err.Error()))
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
 
 	doc.Find("br").Remove()
 
 	e, err := epub.New(item.Title, w)
 	if err != nil {
-		log.Fatal(err)
+		log.ErrorContext(r.Context(), "failed to create epub", slog.String("error", err.Error()))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 	if len(item.Authors) > 0 {
 		e.SetAuthor(item.Authors[0].Name)
@@ -111,15 +143,24 @@ func download(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		resp, err := http.Get(src)
+		log := log.With(slog.String("image src", src))
+
+		req, err := http.NewRequestWithContext(r.Context(), "GET", src, nil)
 		if err != nil {
-			log.Println(err)
+			log.ErrorContext(r.Context(), "failed to create request ?", slog.String("error", err.Error()))
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.ErrorContext(r.Context(), "failed to get image", slog.String("error", err.Error()))
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
 		path := strings.Split(src, "/")
 		filename := url.PathEscape(replaceExt(path[len(path)-1], ".jpeg"))
-		log.Println(path, filename)
 		e.AddMedia(resp.Body, filename, "image/jpeg",
 			func(dst io.Writer, src io.Reader) (int64, error) {
 				return 0, vips.TranscodeStream(src, dst, &vips.TranscodeOptions{
@@ -153,8 +194,11 @@ func download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/epub+zip")
 	_, err = e.Write()
 	if err != nil {
-		log.Fatal(err)
+		log.ErrorContext(r.Context(), "failed to write epub", slog.String("error", err.Error()))
+		return
 	}
+
+	log.DebugContext(r.Context(), "successfully served article", slog.String("title", item.Title))
 }
 
 func main() {
@@ -163,8 +207,14 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/{url}", feed)
-	mux.HandleFunc("/{url}/download/{id}", download)
+	h := handler{
+		log: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})),
+	}
+
+	mux.HandleFunc("/{url}", h.feed)
+	mux.HandleFunc("/{url}/download/{id}", h.download)
 
 	log.Fatal(http.ListenAndServe(":8080", mux))
 }

@@ -59,40 +59,17 @@ type xhtmlLink struct {
 // implemented as a string because we don't know what it will contain and we
 // leave it up to the user of the package to validate the content
 type xhtmlInnerxml struct {
-	XML string `xml:",innerxml"`
-	Dir string `xml:"dir,attr,omitempty"`
+	XML io.Reader
+	Dir string
 }
 
 // Constructor for xhtml
-func newXhtml(body string) (*xhtml, error) {
-	xmlroot, err := newXhtmlRoot()
-	if err != nil {
-		return nil, fmt.Errorf("can't create newXhtmlRoot because of: %w", err)
+func newXhtml(body io.Reader) *xhtml {
+	return &xhtml{
+		xml: &xhtmlRoot{
+			Body: xhtmlInnerxml{XML: body, Dir: "auto"},
+		},
 	}
-	x := &xhtml{
-		xml: xmlroot,
-	}
-	x.setBody(body)
-
-	return x, nil
-}
-
-// Constructor for xhtmlRoot
-func newXhtmlRoot() (*xhtmlRoot, error) {
-	r := &xhtmlRoot{
-		Body: xhtmlInnerxml{Dir: "auto"},
-	}
-	err := xml.Unmarshal([]byte(xhtmlTemplate), &r)
-
-	if err != nil {
-		return nil, fmt.Errorf("Error unmarshalling xhtmlRoot: %w\n"+"\txhtmlRoot=%#v\n"+"\txhtmlTemplate=%s", err, *r, xhtmlTemplate)
-	}
-	return r, nil
-}
-
-func (x *xhtml) setBody(body string) {
-	x.xml.Body.XML = "\n" + body + "\n"
-	x.xml.Body.Dir = "auto"
 }
 
 func (x *xhtml) setCSS(path string) {
@@ -118,12 +95,41 @@ func (x *xhtml) Title() string {
 	return x.xml.Head.Title.Value
 }
 
-// Write the XHTML file to the given writer
 func (x *xhtml) write(w io.Writer) error {
-	_, err := w.Write(append([]byte(xml.Header), []byte(xhtmlDoctype)...))
-	if err != nil {
+	if _, err := w.Write([]byte(xml.Header + xhtmlDoctype)); err != nil {
 		return err
 	}
 
-	return xml.NewEncoder(w).Encode(x.xml)
+	xmlnsAttr := ""
+	if x.xml.XmlnsEpub != "" {
+		xmlnsAttr = fmt.Sprintf(` xmlns:epub="%s"`, x.xml.XmlnsEpub)
+	}
+	if _, err := fmt.Fprintf(w, `<html xmlns="http://www.w3.org/1999/xhtml"%s>`, xmlnsAttr); err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintf(w, `<head><title dir="%s">%s</title>`, x.xml.Head.Title.Dir, x.xml.Head.Title.Value); err != nil {
+		return err
+	}
+	if x.xml.Head.Link != nil {
+		if _, err := fmt.Fprintf(w, `<link rel="%s" type="%s" href="%s" />`, x.xml.Head.Link.Rel, x.xml.Head.Link.Type, x.xml.Head.Link.Href); err != nil {
+			return err
+		}
+	}
+	if _, err := w.Write([]byte("</head>")); err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintf(w, `<body dir="%s">`+"\n", x.xml.Body.Dir); err != nil {
+		return err
+	}
+
+	if x.xml.Body.XML != nil {
+		if _, err := io.Copy(w, x.xml.Body.XML); err != nil {
+			return err
+		}
+	}
+
+	_, err := w.Write([]byte("\n</body>\n</html>\n"))
+	return err
 }

@@ -39,15 +39,6 @@ type epubSection struct {
 	children []*epubSection
 }
 
-type transcoderFunc func(io.Writer, io.Reader) (int64, error)
-
-type epubMedia struct {
-	filename   string
-	mediaType  string
-	src        io.Reader
-	transcoder transcoderFunc
-}
-
 const (
 	defaultEpubLang = "en"
 	urnUUIDPrefix   = "urn:uuid:"
@@ -138,20 +129,12 @@ const (
 	// http://www.idpf.org/epub/31/spec/epub-ocf.html
 	contentFolderName    = "EPUB"
 	coverImageProperties = "cover-image"
-	// Permissions for any new directories we create
-	dirPermissions = 0755
-	// Permissions for any new files we create
-	filePermissions = 0644
-	// mediaTypeCSS      = "text/css"
-	mediaTypeEPUB     = "application/epub+zip"
-	mediaTypeJpeg     = "image/jpeg"
-	mediaTypeNCX      = "application/x-dtbncx+xml"
-	mediaTypeXHTML    = "application/xhtml+xml"
-	metaInfFolderName = "META-INF"
-	mimetypeFilename  = "mimetype"
-	pkgFilename       = "package.opf"
-	tempDirPrefix     = "go-epub"
-	xhtmlFolderName   = "xhtml"
+	mediaTypeEPUB        = "application/epub+zip"
+	mediaTypeNCX         = "application/x-dtbncx+xml"
+	mediaTypeXHTML       = "application/xhtml+xml"
+	metaInfFolderName    = "META-INF"
+	mimetypeFilename     = "mimetype"
+	pkgFilename          = "package.opf"
 )
 
 func (e *Epub) writeTOC(w *zip.Writer) error {
@@ -195,40 +178,8 @@ func writeContainerFile(w *zip.Writer) error {
 	return nil
 }
 
-func (e *Epub) writeSections(w *zip.Writer) error {
-	for _, section := range e.sections {
-
-		// Set the title of the cover page XHTML to the title of the EPUB
-		// if section.filename == e.cover.xhtmlFilename {
-		// section.xhtml.setTitle(e.Title())
-		// }
-
-		sectionFilePath := filepath.Join(contentFolderName, section.filename)
-		dst, _ := w.Create(sectionFilePath)
-		err := section.xhtml.write(dst)
-		if err != nil {
-			return err
-		}
-
-		relativePath := filepath.Join(section.filename)
-		// if section.filename != e.cover.xhtmlFilename {
-		// e.pkg.addToSpine(section.filename)
-		// }
-		e.pkg.addToSpine(section.filename)
-		e.pkg.addToManifest(section.filename, relativePath, "application/xhtml+xml", "")
-		e.toc.addSubSection("-1", 0, section.xhtml.Title(), relativePath)
-	}
-
-	return nil
-}
-
 func (e *Epub) Write() (int64, error) {
-	err := e.writeSections(e.dst)
-	if err != nil {
-		return 0, err
-	}
-
-	err = e.writeTOC(e.dst)
+	err := e.writeTOC(e.dst)
 	if err != nil {
 		return 0, err
 	}
@@ -241,13 +192,10 @@ func (e *Epub) Write() (int64, error) {
 	return 0, e.dst.Close()
 }
 
-func (e *Epub) AddSection(body, sectionTitle string) (string, error) {
+func (e *Epub) AddSection(src io.Reader, sectionTitle string) error {
 	internalFilename := fmt.Sprintf("section%04d.xhtml", len(e.sections))
 
-	x, err := newXhtml(body)
-	if err != nil {
-		return internalFilename, fmt.Errorf("can't add section we cant create xhtml: %w", err)
-	}
+	x := newXhtml(src)
 	x.setTitle(sectionTitle)
 	x.setXmlnsEpub(xmlnsEpub)
 
@@ -257,10 +205,31 @@ func (e *Epub) AddSection(body, sectionTitle string) (string, error) {
 			xhtml:    x,
 			children: nil,
 		})
-	return internalFilename, nil
+
+	// Set the title of the cover page XHTML to the title of the EPUB
+	// if section.filename == e.cover.xhtmlFilename {
+	// section.xhtml.setTitle(e.Title())
+	// }
+
+	sectionFilePath := filepath.Join(contentFolderName, internalFilename)
+	dst, _ := e.dst.Create(sectionFilePath)
+	err := x.write(dst)
+	if err != nil {
+		return err
+	}
+
+	// if section.filename != e.cover.xhtmlFilename {
+	// e.pkg.addToSpine(section.filename)
+	// }
+	e.pkg.addToSpine(internalFilename)
+	e.pkg.addToManifest(internalFilename, internalFilename, "application/xhtml+xml", "")
+	e.toc.addSubSection("-1", 0, x.Title(), internalFilename)
+	return nil
 }
 
-func (e *Epub) AddMedia(src io.Reader, filename, mediaType string, transcoder transcoderFunc) error {
+type TranscoderFunc func(io.Writer, io.Reader) (int64, error)
+
+func (e *Epub) AddMedia(src io.Reader, filename, mediaType string, transcoder TranscoderFunc) error {
 	dst, err := e.dst.Create(filepath.Join(contentFolderName, filename))
 	if err != nil {
 		return err

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -247,10 +248,7 @@ func (t *toc) writeNavDoc(w io.Writer) error {
 	re := regexp.MustCompile(`\s*<ol>\s*</ol>`)
 	bodyWithoutEmptyTags := re.ReplaceAllString(string(navBodyContent), "")
 
-	n, err := newXhtml(bodyWithoutEmptyTags)
-	if err != nil {
-		return fmt.Errorf("can't create xhtml for TOC file: %w", err)
-	}
+	n := newXhtml(strings.NewReader(bodyWithoutEmptyTags))
 	n.setXmlnsEpub(xmlnsEpub)
 	n.setTitle(t.title)
 

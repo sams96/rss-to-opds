@@ -73,14 +73,14 @@ func (h *handler) feed(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "%s", string(j))
 }
 
-func fullContent(s *goquery.Selection) string {
+func fullContent(s *goquery.Selection) io.Reader {
 	var htmlBuilder strings.Builder
 	s.Each(func(_ int, s *goquery.Selection) {
 		nodeHTML, _ := goquery.OuterHtml(s)
 		htmlBuilder.WriteString(nodeHTML)
 	})
 
-	return htmlBuilder.String()
+	return strings.NewReader(htmlBuilder.String())
 }
 
 func replaceExt(filename, newExt string) string {

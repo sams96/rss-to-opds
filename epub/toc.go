@@ -189,20 +189,20 @@ func (t *toc) addSubSection(parent string, index int, title string, relativePath
 		if err != nil {
 			log.Println(err)
 		}
-		/*
-			np := &tocNcxNavPoint{
-				ID:   "navPoint-" + strconv.Itoa(index),
-				Text: title,
-				Content: tocNcxContent{
-					Src: relativePath,
-				},
-				Children: nil,
-			}
-			err = ncxAppender(t.ncxXML.NavMap, parentRelativePath, np)
-			if err != nil {
-				log.Println(err)
-			}
-		*/
+
+		np := &tocNcxNavPoint{
+			ID:   "navPoint-" + strconv.Itoa(index),
+			Text: title,
+			Content: tocNcxContent{
+				Src: relativePath,
+			},
+			Children: nil,
+		}
+		err = ncxAppender(t.ncxXML.NavMap, parentRelativePath, np)
+		if err != nil {
+			log.Println(err)
+		}
+
 	}
 }
 
@@ -217,20 +217,25 @@ func (t *toc) setTitle(title string) {
 // Write the TOC files
 func (t *toc) write(w *zip.Writer) error {
 	navFilePath := filepath.Join(contentFolderName, tocNavFilename)
-	writer, err := w.Create(navFilePath)
+	navDst, err := w.Create(navFilePath)
 	if err != nil {
 		return err
 	}
-	err = t.writeNavDoc(writer)
+	err = t.writeNavDoc(navDst)
 	if err != nil {
 		return err
 	}
-	/*
-		err = t.writeNcxDoc(tempDir)
-		if err != nil {
-			return err
-		}
-	*/
+
+	ncxFilePath := filepath.Join(contentFolderName, tocNcxFilename)
+	ncxDst, err := w.Create(ncxFilePath)
+	if err != nil {
+		return err
+	}
+	err = t.writeNcxDoc(ncxDst)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -252,33 +257,32 @@ func (t *toc) writeNavDoc(w io.Writer) error {
 	n.setXmlnsEpub(xmlnsEpub)
 	n.setTitle(t.title)
 
-	err = n.write(w)
-	if err != nil {
+	if err := n.write(w); err != nil {
 		return fmt.Errorf("can't write TOC file: %w", err)
 	}
 	return nil
 }
 
 // Write the EPUB v2 TOC file (toc.ncx) to the temporary directory
-/*
-func (t *toc) writeNcxDoc(tempDir string) error {
+
+func (t *toc) writeNcxDoc(w io.Writer) error {
 	t.ncxXML.Title = t.title
 	t.ncxXML.Author = t.author
 
-	ncxFileContent, err := xml.MarshalIndent(t.ncxXML, "", "  ")
-	if err != nil {
-		return fmt.Errorf("Error marshalling XML for EPUB v2 TOC file: %w\n"+"+\tXML=%#v", err, t.ncxXML)
+	if _, err := w.Write([]byte(xml.Header)); err != nil {
+		return err
 	}
 
-	// Add the xml header to the output
-	ncxFileContent = append([]byte(xml.Header), ncxFileContent...)
-	// It's generally nice to have files end with a newline
-	ncxFileContent = append(ncxFileContent, "\n"...)
-
-	ncxFilePath := filepath.Join(tempDir, contentFolderName, tocNcxFilename)
-	if err := filesystem.WriteFile(ncxFilePath, []byte(ncxFileContent), filePermissions); err != nil {
-		return fmt.Errorf("Error writing EPUB v2 TOC file: %w", err)
+	enc := xml.NewEncoder(w)
+	enc.Indent("", "  ")
+	if err := enc.Encode(t.ncxXML); err != nil {
+		return err
 	}
+
+	if _, err := w.Write([]byte("\n")); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -299,7 +303,6 @@ func ncxAppender(t []*tocNcxNavPoint, parentFilename string, targetsection *tocN
 	}
 	return fmt.Errorf("parent section not found")
 }
-*/
 
 // Append tocNavItem to parent children for toc in Epub v3
 func AppendNav(t []*tocNavItem, parentFilename string, targetsection *tocNavItem) error {

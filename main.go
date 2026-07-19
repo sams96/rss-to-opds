@@ -1,8 +1,9 @@
 package main
 
 import (
-	"encoding/xml"
+	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"log/slog"
@@ -16,10 +17,10 @@ import (
 	"github.com/sams96/rss-to-opds/epub"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/antchfx/xmlquery"
 	"github.com/davidbyttow/govips/v2/vips"
 	"github.com/google/uuid"
 	"github.com/mmcdole/gofeed"
-	"github.com/opds-community/libopds2-go/opds1"
 )
 
 type handler struct {
@@ -30,47 +31,105 @@ func (h *handler) feed(w http.ResponseWriter, r *http.Request) {
 	feedURL := r.PathValue("url")
 	log := h.log.With(slog.String("feed", feedURL))
 
-	fp := gofeed.NewParser()
-	feed, err := fp.ParseURL(feedURL)
+	req, err := http.NewRequestWithContext(r.Context(), "GET", feedURL, nil)
 	if err != nil {
-		log.InfoContext(r.Context(), "failed to parse url", slog.String("error", err.Error()))
+		log.InfoContext(r.Context(), "failed to create request", slog.String("error", err.Error()))
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	opds := opds1.Feed{
-		ID:      uuid.NewString(),
-		Title:   feed.Title,
-		Updated: time.Now(),
-	}
-
-	for _, item := range feed.Items {
-		pub := opds1.Entry{
-			Title:   item.Title,
-			ID:      item.GUID,
-			Updated: item.UpdatedParsed,
-			Links: []opds1.Link{
-				{
-					Rel:      "http://opds-spec.org/acquisition/buy",
-					TypeLink: "application/epub+zip",
-					Href:     fmt.Sprintf("/%s/download/%s", url.QueryEscape(feedURL), url.QueryEscape(item.GUID)),
-				},
-			},
-		}
-		opds.Entries = append(opds.Entries, pub)
-		opds.TotalResults++
-		opds.ItemsPerPage++
-	}
-
-	j, err := xml.Marshal(opds)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.ErrorContext(r.Context(), "failed to marshal xml", slog.String("error", err.Error()))
+		log.InfoContext(r.Context(), "failed to fetch feed", slog.String("error", err.Error()))
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.InfoContext(r.Context(), "remote feed returned bad status", slog.Int("status", resp.StatusCode))
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	parser, err := xmlquery.CreateStreamParser(resp.Body, "/rss/channel/title | /rss/channel/item")
+	if err != nil {
+		log.ErrorContext(r.Context(), "failed to init stream parser", slog.String("error", err.Error()))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/atom+xml;profile=opds-catalog;kind=acquisition")
-	fmt.Fprintf(w, "%s", string(j))
+	w.WriteHeader(http.StatusOK)
+
+	feedTitle := "untitled feed"
+	headerWritten := false
+
+	for {
+		node, err := parser.Read()
+		if errors.Is(err, io.EOF) {
+			println("EOF")
+			break
+		}
+		if err != nil {
+			// TODO: return an error in the feed
+			log.ErrorContext(r.Context(), "error reading stream item", slog.String("error", err.Error()))
+			return
+		}
+
+		println(node.InnerText())
+
+		if node.Data == "title" {
+			feedTitle = node.InnerText()
+			continue
+		}
+
+		if !headerWritten {
+			_, err = fmt.Fprintf(w, `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
+  <id>%s</id>
+  <title>%s</title>
+  <updated>%s</updated>
+  `, uuid.NewString(), html.EscapeString(feedTitle), time.Now().Format(time.RFC3339))
+			if err != nil {
+				log.ErrorContext(r.Context(), "failed to write header", slog.String("error", err.Error()))
+				return
+			}
+			headerWritten = true
+		}
+
+		var title, guid, updated string
+		if n := xmlquery.FindOne(node, "./title"); n != nil {
+			title = n.InnerText()
+		}
+		if n := xmlquery.FindOne(node, "./guid | ./id"); n != nil {
+			guid = n.InnerText()
+		}
+		if n := xmlquery.FindOne(node, "./pubDate | ./updated"); n != nil {
+			updated = n.InnerText()
+		}
+
+		downloadHref := fmt.Sprintf("/%s/download/%s", url.QueryEscape(feedURL), url.QueryEscape(guid))
+
+		_, err = fmt.Fprintf(w, `  <entry>
+    <title>%s</title>
+    <id>%s</id>
+    <updated>%s</updated>
+    <link rel="http://opds-spec.org/acquisition/buy" type="application/epub+zip" href="%s"/>
+  </entry>
+`, html.EscapeString(title), html.EscapeString(guid), updated, html.EscapeString(downloadHref))
+		if err != nil {
+			log.ErrorContext(r.Context(), "failed to write entry", slog.String("error", err.Error()))
+			return
+		}
+
+	}
+
+	if !headerWritten {
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>%s</title>`, html.EscapeString(feedTitle))
+	}
+
+	io.WriteString(w, "</feed>")
 }
 
 func fullContent(s *goquery.Selection) io.Reader {
@@ -158,6 +217,7 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		defer resp.Body.Close()
 
 		path := strings.Split(src, "/")
 		filename := url.PathEscape(replaceExt(path[len(path)-1], ".jpeg"))

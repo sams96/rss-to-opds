@@ -1,6 +1,6 @@
 # RSS to OPDS
 
-A webserver that converts RSS/atom/json feeds into OPDS, and the content from
+A webserver that converts RSS/atom feeds into OPDS, and the content from
 the input feed into per entry epubs. Very much a work in progress.
 
 ## Usage
@@ -25,8 +25,7 @@ http://localhost:8080/https%3A%2F%2Fsamsm.ch%2Findex.xml
 ## Thanks to
 
 - [github.com/go-shiori/go-epub](https://github.com/go-shiori/go-epub)
-- [github.com/mmcdole/gofeed](https://github.com/mmcdole/gofeed)
-- [github.com/opds-community/libopds2-go](https://github.com/opds-community/libopds2-go)
+- [github.com/antchfx/xmlquery](https://github.com/antchfx/xmlquery)
 - [github.com/PuerkitoBio/goquery](https://github.com/PuerkitoBio/goquery)
 - [github.com/davidbyttow/govips](https://github.com/davidbyttow/govips) and davidbyttow/govips#530
 
@@ -38,7 +37,7 @@ http://localhost:8080/https%3A%2F%2Fsamsm.ch%2Findex.xml
 full content
 - [x] Parse sections from content, split into sections and subsections in the 
 epub (done for sections)
-- [ ] Handle errors
+- [x] Handle errors
 - [ ] Better html -> xhtml conversion
 - [ ] Cover images
 - [ ] ???

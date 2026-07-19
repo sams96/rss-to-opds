@@ -162,11 +162,7 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 		path := strings.Split(src, "/")
 		filename := url.PathEscape(replaceExt(path[len(path)-1], ".jpeg"))
 		e.AddMedia(resp.Body, filename, "image/jpeg",
-			func(dst io.Writer, src io.Reader) (int64, error) {
-				return 0, vips.TranscodeStream(src, dst, &vips.TranscodeOptions{
-					Format: vips.ImageTypeJPEG,
-				})
-			})
+			transcodeImage(&imageOptions{maxDimensions: new(1024), greyscale: true}))
 
 		img.SetAttr("src", filename)
 	})

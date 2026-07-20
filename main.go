@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"html"
 	"io"
+	"iter"
 	"log"
 	"log/slog"
 	"net/http"
@@ -27,37 +29,88 @@ type handler struct {
 	log *slog.Logger
 }
 
+func fetchFeed(ctx context.Context, url string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch feed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d is not okay", resp.StatusCode)
+	}
+
+	return resp.Body, nil
+}
+
+type streamItem struct {
+	node    *xmlquery.Node
+	title   string
+	guid    string
+	updated string
+}
+
+func yieldStreamItems(stream io.Reader) iter.Seq2[streamItem, error] {
+	return func(yield func(streamItem, error) bool) {
+		parser, err := xmlquery.CreateStreamParser(stream, "/rss/channel/title | /rss/channel/item")
+		if err != nil {
+			yield(streamItem{}, err)
+			return
+		}
+
+		for {
+			node, err := parser.Read()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				yield(streamItem{}, fmt.Errorf("error reading stream: %w", err))
+				return
+			}
+
+			var item streamItem
+			item.node = node
+
+			if node.Data == "title" {
+				item.title = node.InnerText()
+				if !yield(item, nil) {
+					return
+				}
+				continue
+			}
+
+			if n := xmlquery.FindOne(node, "./title"); n != nil {
+				item.title = n.InnerText()
+			}
+			if n := xmlquery.FindOne(node, "./guid | ./id"); n != nil {
+				item.guid = n.InnerText()
+			}
+			if n := xmlquery.FindOne(node, "./pubDate | ./updated"); n != nil {
+				item.updated = n.InnerText()
+			}
+
+			if !yield(item, nil) {
+				return
+			}
+		}
+	}
+}
+
 func (h *handler) feed(w http.ResponseWriter, r *http.Request) {
 	feedURL := r.PathValue("url")
 	log := h.log.With(slog.String("feed", feedURL))
 
-	req, err := http.NewRequestWithContext(r.Context(), "GET", feedURL, nil)
-	if err != nil {
-		log.InfoContext(r.Context(), "failed to create request", slog.String("error", err.Error()))
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fetchFeed(r.Context(), feedURL)
 	if err != nil {
 		log.InfoContext(r.Context(), "failed to fetch feed", slog.String("error", err.Error()))
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.InfoContext(r.Context(), "remote feed returned bad status", slog.Int("status", resp.StatusCode))
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	parser, err := xmlquery.CreateStreamParser(resp.Body, "/rss/channel/title | /rss/channel/item")
-	if err != nil {
-		log.ErrorContext(r.Context(), "failed to init stream parser", slog.String("error", err.Error()))
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	defer resp.Close()
 
 	w.Header().Set("Content-Type", "application/atom+xml;profile=opds-catalog;kind=acquisition")
 	w.WriteHeader(http.StatusOK)
@@ -65,22 +118,15 @@ func (h *handler) feed(w http.ResponseWriter, r *http.Request) {
 	feedTitle := "untitled feed"
 	headerWritten := false
 
-	for {
-		node, err := parser.Read()
-		if errors.Is(err, io.EOF) {
-			println("EOF")
-			break
-		}
+	for item, err := range yieldStreamItems(resp) {
 		if err != nil {
 			// TODO: return an error in the feed
 			log.ErrorContext(r.Context(), "error reading stream item", slog.String("error", err.Error()))
 			return
 		}
 
-		println(node.InnerText())
-
-		if node.Data == "title" {
-			feedTitle = node.InnerText()
+		if item.guid == "" {
+			feedTitle = item.title
 			continue
 		}
 
@@ -98,18 +144,7 @@ func (h *handler) feed(w http.ResponseWriter, r *http.Request) {
 			headerWritten = true
 		}
 
-		var title, guid, updated string
-		if n := xmlquery.FindOne(node, "./title"); n != nil {
-			title = n.InnerText()
-		}
-		if n := xmlquery.FindOne(node, "./guid | ./id"); n != nil {
-			guid = n.InnerText()
-		}
-		if n := xmlquery.FindOne(node, "./pubDate | ./updated"); n != nil {
-			updated = n.InnerText()
-		}
-
-		downloadHref := fmt.Sprintf("/%s/download/%s", url.QueryEscape(feedURL), url.QueryEscape(guid))
+		downloadHref := fmt.Sprintf("/%s/download/%s", url.QueryEscape(feedURL), url.QueryEscape(item.guid))
 
 		_, err = fmt.Fprintf(w, `  <entry>
     <title>%s</title>
@@ -117,7 +152,7 @@ func (h *handler) feed(w http.ResponseWriter, r *http.Request) {
     <updated>%s</updated>
     <link rel="http://opds-spec.org/acquisition/buy" type="application/epub+zip" href="%s"/>
   </entry>
-`, html.EscapeString(title), html.EscapeString(guid), updated, html.EscapeString(downloadHref))
+`, html.EscapeString(item.title), html.EscapeString(item.guid), item.updated, html.EscapeString(downloadHref))
 		if err != nil {
 			log.ErrorContext(r.Context(), "failed to write entry", slog.String("error", err.Error()))
 			return

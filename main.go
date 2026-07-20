@@ -22,7 +22,6 @@ import (
 	"github.com/antchfx/xmlquery"
 	"github.com/davidbyttow/govips/v2/vips"
 	"github.com/google/uuid"
-	"github.com/mmcdole/gofeed"
 )
 
 type handler struct {
@@ -188,30 +187,47 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	log := h.log.With(slog.String("feed", feedURL), slog.String("id", id))
 
-	fp := gofeed.NewParser()
-	feed, err := fp.ParseURL(feedURL)
+	resp, err := fetchFeed(r.Context(), feedURL)
 	if err != nil {
-		log.InfoContext(r.Context(), "failed to parse url", slog.String("error", err.Error()))
+		log.InfoContext(r.Context(), "failed to fetch feed", slog.String("error", err.Error()))
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	defer resp.Close()
 
-	var item *gofeed.Item
-	for _, i := range feed.Items {
-		if i.GUID == id {
-			item = i
+	var (
+		targetItem *streamItem
+		feedTitle  string
+	)
+	for item, err := range yieldStreamItems(resp) {
+		if err != nil {
+			// TODO: return an error in the feed
+			log.ErrorContext(r.Context(), "error reading stream item", slog.String("error", err.Error()))
+			return
+		}
+
+		if item.guid == "" {
+			feedTitle = item.title
+			continue
+		}
+
+		if item.guid == id {
+			targetItem = &item
+			break
 		}
 	}
-	if item == nil {
-		log.InfoContext(r.Context(), "No item for id")
-		w.WriteHeader(http.StatusBadRequest)
+
+	if targetItem == nil {
+		log.InfoContext(r.Context(), "item missing")
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	content := item.Content
-	if len(content) == 0 {
-		content = item.Description
+	var content string
+	if n := xmlquery.FindOne(targetItem.node, "./content:encoded |./content | ./description"); n != nil {
+		content = n.InnerText()
 	}
+
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(content))
 	if err != nil {
 		log.WarnContext(r.Context(), "failed to parse content", slog.String("error", err.Error()))
@@ -221,15 +237,13 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 
 	doc.Find("br").Remove()
 
-	e, err := epub.New(item.Title, w)
+	e, err := epub.New(targetItem.title, w)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to create epub", slog.String("error", err.Error()))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	if len(item.Authors) > 0 {
-		e.SetAuthor(item.Authors[0].Name)
-	}
+	e.SetAuthor(feedTitle)
 
 	doc.Find("img").Each(func(_ int, img *goquery.Selection) {
 		src, _ := img.Attr("src")
@@ -266,7 +280,7 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	if h1s.Length() == 0 {
 		entireDoc := doc.Find("body").Children()
 		if entireDoc.Length() > 0 {
-			e.AddSection(fullContent(entireDoc), item.Title)
+			e.AddSection(fullContent(entireDoc), targetItem.title)
 		}
 	} else {
 		firstH1 := h1s.First()
@@ -289,7 +303,7 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.DebugContext(r.Context(), "successfully served article", slog.String("title", item.Title))
+	log.DebugContext(r.Context(), "successfully served article", slog.String("title", targetItem.title))
 }
 
 func main() {

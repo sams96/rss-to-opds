@@ -213,9 +213,9 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var content string
-	if n := xmlquery.FindOne(targetItem.node, "./content:encoded |./content | ./description"); n != nil {
-		content = n.InnerText()
+	var content io.Reader
+	if n := xmlquery.FindOne(targetItem.node, "./content:encoded | ./content | ./description"); n != nil {
+		content = streamContent(r.Context(), n)
 	}
 
 	e, err := epub.New(targetItem.title, w)
@@ -227,17 +227,15 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	e.SetAuthor(feedTitle)
 
 	var (
-		tokeniser    = html.NewTokenizer(strings.NewReader(content))
+		tokeniser    = html.NewTokenizer(content)
 		cleanHTML    bytes.Buffer
 		h1TextBuf    strings.Builder
 		inH1         bool
 		sectionTitle = "Introduction"
-		sectionCount int
 		flushSection = func(title string) {
 			if cleanHTML.Len() > 0 {
 				e.AddSection(&cleanHTML, title)
 				cleanHTML.Reset()
-				sectionCount++
 			}
 		}
 	)
@@ -286,17 +284,15 @@ loop:
 			if inH1 {
 				h1TextBuf.WriteString(token.Data)
 			}
-
 		}
 
 		cleanHTML.WriteString(token.String())
 	}
 
-	finalTitle := sectionTitle
-	if sectionCount == 0 {
-		finalTitle = targetItem.title
+	if sectionTitle == "Introduction" {
+		sectionTitle = targetItem.title
 	}
-	flushSection(finalTitle)
+	flushSection(sectionTitle)
 
 	w.Header().Set("Content-Type", "application/epub+zip")
 	_, err = e.Write()
@@ -306,6 +302,20 @@ loop:
 	}
 
 	log.DebugContext(r.Context(), "successfully served article", slog.String("title", targetItem.title))
+}
+
+func streamContent(ctx context.Context, node *xmlquery.Node) io.Reader {
+	pr, pw := io.Pipe()
+	context.AfterFunc(ctx, func() {
+		pr.Close()
+	})
+
+	go func() {
+		err := node.Write(pw, false)
+		_ = pw.CloseWithError(err)
+	}()
+
+	return pr
 }
 
 func (h *handler) replaceImage(ctx context.Context, e *epub.Epub, token html.Token) html.Token {

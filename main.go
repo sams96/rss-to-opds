@@ -1,10 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"iter"
 	"log"
@@ -18,10 +18,10 @@ import (
 
 	"github.com/sams96/rss-to-opds/epub"
 
-	"github.com/PuerkitoBio/goquery"
 	"github.com/antchfx/xmlquery"
 	"github.com/davidbyttow/govips/v2/vips"
 	"github.com/google/uuid"
+	"golang.org/x/net/html"
 )
 
 type handler struct {
@@ -166,16 +166,6 @@ func (h *handler) feed(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "</feed>")
 }
 
-func fullContent(s *goquery.Selection) io.Reader {
-	var htmlBuilder strings.Builder
-	s.Each(func(_ int, s *goquery.Selection) {
-		nodeHTML, _ := goquery.OuterHtml(s)
-		htmlBuilder.WriteString(nodeHTML)
-	})
-
-	return strings.NewReader(htmlBuilder.String())
-}
-
 func replaceExt(filename, newExt string) string {
 	ext := filepath.Ext(filename)
 	name := strings.TrimSuffix(filename, ext)
@@ -228,15 +218,6 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 		content = n.InnerText()
 	}
 
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(content))
-	if err != nil {
-		log.WarnContext(r.Context(), "failed to parse content", slog.String("error", err.Error()))
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	doc.Find("br").Remove()
-
 	e, err := epub.New(targetItem.title, w)
 	if err != nil {
 		log.ErrorContext(r.Context(), "failed to create epub", slog.String("error", err.Error()))
@@ -245,56 +226,77 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	}
 	e.SetAuthor(feedTitle)
 
-	doc.Find("img").Each(func(_ int, img *goquery.Selection) {
-		src, _ := img.Attr("src")
-		if !strings.HasPrefix(src, "http") {
+	var (
+		tokeniser    = html.NewTokenizer(strings.NewReader(content))
+		cleanHTML    bytes.Buffer
+		h1TextBuf    strings.Builder
+		inH1         bool
+		sectionTitle = "Introduction"
+		sectionCount int
+		flushSection = func(title string) {
+			if cleanHTML.Len() > 0 {
+				e.AddSection(&cleanHTML, title)
+				cleanHTML.Reset()
+				sectionCount++
+			}
+		}
+	)
+
+loop:
+	for {
+		tokenType := tokeniser.Next()
+		if tokenType == html.ErrorToken {
+			err := tokeniser.Err()
+			if err == io.EOF {
+				break loop
+			}
+			log.WarnContext(r.Context(), "failed to tokenise html", slog.String("error", err.Error()))
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
-		log := log.With(slog.String("image src", src))
+		token := tokeniser.Token()
 
-		req, err := http.NewRequestWithContext(r.Context(), "GET", src, nil)
-		if err != nil {
-			log.ErrorContext(r.Context(), "failed to create request ?", slog.String("error", err.Error()))
-			w.WriteHeader(http.StatusInternalServerError)
-			return
+		switch tokenType {
+		case html.StartTagToken, html.SelfClosingTagToken:
+			switch token.Data {
+			case "br", "hr":
+				continue
+			case "h1":
+				flushSection(sectionTitle)
+				inH1 = true
+				h1TextBuf.Reset()
+			case "img":
+				token = h.replaceImage(r.Context(), e, token)
+			}
+
+		case html.EndTagToken:
+			switch token.Data {
+			case "br", "hr":
+				continue
+			case "h1":
+				inH1 = false
+				title := strings.TrimSpace(h1TextBuf.String())
+				if title != "" {
+					sectionTitle = title
+				}
+			}
+
+		case html.TextToken:
+			if inH1 {
+				h1TextBuf.WriteString(token.Data)
+			}
+
 		}
 
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			log.ErrorContext(r.Context(), "failed to get image", slog.String("error", err.Error()))
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		defer resp.Body.Close()
-
-		path := strings.Split(src, "/")
-		filename := url.PathEscape(replaceExt(path[len(path)-1], ".jpeg"))
-		transcoded := transcodeImage(r.Context(), resp.Body, &imageOptions{maxDimensions: new(1024), greyscale: true})
-		e.AddMedia(transcoded, filename, "image/jpeg")
-
-		img.SetAttr("src", filename)
-	})
-
-	h1s := doc.Find("h1")
-	if h1s.Length() == 0 {
-		entireDoc := doc.Find("body").Children()
-		if entireDoc.Length() > 0 {
-			e.AddSection(fullContent(entireDoc), targetItem.title)
-		}
-	} else {
-		firstH1 := h1s.First()
-		introSection := firstH1.PrevAll()
-		if introSection.Length() > 0 {
-			e.AddSection(fullContent(introSection), "Introduction")
-		}
+		cleanHTML.WriteString(token.String())
 	}
 
-	h1s.Each(func(i int, h1 *goquery.Selection) {
-		nextH1 := h1.NextAllFiltered("h1").First()
-		section := h1.AddSelection(h1.NextUntilSelection(nextH1))
-		e.AddSection(fullContent(section), h1.Text())
-	})
+	finalTitle := sectionTitle
+	if sectionCount == 0 {
+		finalTitle = targetItem.title
+	}
+	flushSection(finalTitle)
 
 	w.Header().Set("Content-Type", "application/epub+zip")
 	_, err = e.Write()
@@ -304,6 +306,53 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.DebugContext(r.Context(), "successfully served article", slog.String("title", targetItem.title))
+}
+
+func (h *handler) replaceImage(ctx context.Context, e *epub.Epub, token html.Token) html.Token {
+	token.Type = html.SelfClosingTagToken
+
+	var originalSrc, altText string
+
+	for _, attr := range token.Attr {
+		switch attr.Key {
+		case "src":
+			originalSrc = attr.Val
+		case "alt":
+			altText = attr.Val
+		}
+	}
+
+	if !strings.HasPrefix(originalSrc, "http") {
+		token.Attr = []html.Attribute{{Key: "src", Val: originalSrc}}
+		return token
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, originalSrc, nil)
+	if err != nil {
+		token.Attr = []html.Attribute{{Key: "src", Val: originalSrc}}
+		return token
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		token.Attr = []html.Attribute{{Key: "src", Val: originalSrc}}
+		return token
+	}
+	defer resp.Body.Close()
+
+	pathParts := strings.Split(originalSrc, "/")
+	filename := url.PathEscape(replaceExt(pathParts[len(pathParts)-1], ".jpeg"))
+
+	transcoded := transcodeImage(ctx, resp.Body, &imageOptions{maxDimensions: new(1024), greyscale: true})
+	e.AddMedia(transcoded, filename, "image/jpeg")
+
+	newAttrs := []html.Attribute{{Key: "src", Val: filename}}
+	if altText != "" {
+		newAttrs = append(newAttrs, html.Attribute{Key: "alt", Val: altText})
+	}
+
+	token.Attr = newAttrs
+	return token
 }
 
 func main() {

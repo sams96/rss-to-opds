@@ -26,7 +26,6 @@ http://localhost:8080/https%3A%2F%2Fsamsm.ch%2Findex.xml
 
 - [github.com/go-shiori/go-epub](https://github.com/go-shiori/go-epub)
 - [github.com/antchfx/xmlquery](https://github.com/antchfx/xmlquery)
-- [github.com/PuerkitoBio/goquery](https://github.com/PuerkitoBio/goquery)
 - [github.com/davidbyttow/govips](https://github.com/davidbyttow/govips) and davidbyttow/govips#530
 
 ## TODO

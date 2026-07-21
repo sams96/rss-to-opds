@@ -227,15 +227,13 @@ func (e *Epub) AddSection(src io.Reader, sectionTitle string) error {
 	return nil
 }
 
-type TranscoderFunc func(io.Writer, io.Reader) (int64, error)
-
-func (e *Epub) AddMedia(src io.Reader, filename, mediaType string, transcoder TranscoderFunc) error {
+func (e *Epub) AddMedia(src io.Reader, filename, mediaType string) error {
 	dst, err := e.dst.Create(filepath.Join(contentFolderName, filename))
 	if err != nil {
 		return err
 	}
 
-	_, err = transcoder(dst, src)
+	_, err = io.Copy(dst, src)
 	if err != nil {
 		return err
 	}

@@ -270,8 +270,8 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 
 		path := strings.Split(src, "/")
 		filename := url.PathEscape(replaceExt(path[len(path)-1], ".jpeg"))
-		e.AddMedia(resp.Body, filename, "image/jpeg",
-			transcodeImage(&imageOptions{maxDimensions: new(1024), greyscale: true}))
+		transcoded := transcodeImage(r.Context(), resp.Body, &imageOptions{maxDimensions: new(1024), greyscale: true})
+		e.AddMedia(transcoded, filename, "image/jpeg")
 
 		img.SetAttr("src", filename)
 	})

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 
 	"github.com/davidbyttow/govips/v2/vips"
@@ -11,12 +12,27 @@ type imageOptions struct {
 	greyscale     bool
 }
 
-func transcodeImage(opts *imageOptions) func(io.Writer, io.Reader) (int64, error) {
-	return func(dst io.Writer, src io.Reader) (int64, error) {
+func transcodeImage(ctx context.Context, src io.Reader, opts *imageOptions) io.Reader {
+	pr, pw := io.Pipe()
+
+	stop := context.AfterFunc(ctx, func() {
+		pw.CloseWithError(ctx.Err())
+	})
+
+	go func() {
+		defer stop()
+
+		if err := ctx.Err(); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+
 		img, err := vips.LoadImageFromReader(src, nil)
 		if err != nil {
-			return 0, err
+			pw.CloseWithError(err)
+			return
 		}
+		defer img.Close()
 
 		if opts == nil {
 			opts = &imageOptions{}
@@ -27,14 +43,23 @@ func transcodeImage(opts *imageOptions) func(io.Writer, io.Reader) (int64, error
 			Add(opts.greyscale, Greyscale()).
 			Run(img)
 		if err != nil {
-			return 0, err
+			pw.CloseWithError(err)
+			return
 		}
 
-		return 0, img.SaveToWriter(dst, vips.ImageTypeJPEG, &vips.ExportParams{
+		err = img.SaveToWriter(pw, vips.ImageTypeJPEG, &vips.ExportParams{
 			Quality:  50,
 			Lossless: false,
 		})
-	}
+		if err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+
+		pw.Close()
+	}()
+
+	return pr
 }
 
 // Image pipeline

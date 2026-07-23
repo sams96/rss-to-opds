@@ -173,7 +173,7 @@ func writeContainerFile(w *zip.Writer) error {
 			pkgFilename,
 		),
 	); err != nil {
-		return fmt.Errorf("Error writing container file: %w", err)
+		return fmt.Errorf("error writing container file: %w", err)
 	}
 	return nil
 }

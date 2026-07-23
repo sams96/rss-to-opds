@@ -172,6 +172,24 @@ func replaceExt(filename, newExt string) string {
 	return name + newExt
 }
 
+type cdataFilterReader struct {
+	r io.Reader
+}
+
+func (c *cdataFilterReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if n == 0 {
+		return n, err
+	}
+
+	data := p[:n]
+	data = bytes.ReplaceAll(data, []byte("<![CDATA["), nil)
+	data = bytes.ReplaceAll(data, []byte("]]>"), nil)
+
+	copy(p, data)
+	return len(data), err
+}
+
 func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	feedURL := r.PathValue("url")
 	id := r.PathValue("id")
@@ -215,7 +233,7 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 
 	var content io.Reader
 	if n := xmlquery.FindOne(targetItem.node, "./content:encoded | ./content | ./description"); n != nil {
-		content = streamContent(r.Context(), n)
+		content = &cdataFilterReader{r: streamContent(r.Context(), n)}
 	}
 
 	e, err := epub.New(targetItem.title, w)

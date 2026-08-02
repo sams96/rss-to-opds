@@ -13,13 +13,6 @@ import (
 )
 
 const (
-	tocNavBodyTemplate = `
-    <nav epub:type="toc">
-      <h1>Table of Contents</h1>
-      <ol>
-      </ol>
-    </nav>
-`
 	tocNavFilename       = "nav.xhtml"
 	tocNavItemID         = "nav"
 	tocNavItemProperties = "nav"
@@ -27,21 +20,6 @@ const (
 
 	tocNcxFilename = "toc.ncx"
 	tocNcxItemID   = "ncx"
-	tocNcxTemplate = `
-<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
-  <head>
-    <meta name="dtb:uid" content="" />
-    <meta name="dtb:depth" content="" />
-  </head>
-  <docTitle>
-    <text></text>
-  </docTitle>
-  <docAuthor>
-    <text></text>
-  </docAuthor>
-  <navMap>
-  </navMap>
-</ncx>`
 
 	xmlnsEpub = "http://www.idpf.org/2007/ops"
 )
@@ -109,46 +87,32 @@ type tocNcxNavPoint struct {
 }
 
 // Constructor for toc
-func newToc() (*toc, error) {
-	t := &toc{}
-	var err error
-
-	t.navXML, err = newTocNavXML()
-	if err != nil {
-		return nil, fmt.Errorf("can't create navXML: %w", err)
+func newToc() *toc {
+	return &toc{
+		navXML: newTocNavXML(),
+		ncxXML: newTocNcxXML(),
 	}
-
-	t.ncxXML, err = newTocNcxXML()
-	if err != nil {
-		return nil, fmt.Errorf("can't create navXML: %w", err)
-	}
-
-	return t, nil
 }
 
-// Constructor for tocNavBody
-func newTocNavXML() (*tocNavBody, error) {
-	b := &tocNavBody{
+func newTocNavXML() *tocNavBody {
+	return &tocNavBody{
 		EpubType: tocNavEpubType,
+		H1:       "Table of Contents",
+		Links:    nil,
 	}
-	err := xml.Unmarshal([]byte(tocNavBodyTemplate), &b)
-	if err != nil {
-		return nil, fmt.Errorf("Error unmarshalling tocNavBody: %w\n"+"\ttocNavBody=%#v\n"+"\ttocNavBodyTemplate=%s", err, *b, tocNavBodyTemplate)
-	}
-
-	return b, nil
 }
 
-// Constructor for tocNcxRoot
-func newTocNcxXML() (*tocNcxRoot, error) {
-	n := &tocNcxRoot{}
-
-	err := xml.Unmarshal([]byte(tocNcxTemplate), &n)
-	if err != nil {
-		return nil, fmt.Errorf("Error unmarshalling tocNcxRoot: %w\n"+"\ttocNcxRoot=%#v\n"+"\ttocNcxTemplate=%s", err, *n, tocNcxTemplate)
+func newTocNcxXML() *tocNcxRoot {
+	return &tocNcxRoot{
+		Version: "2005-1",
+		Meta: tocNcxMeta{
+			Name:    "dtb:uid",
+			Content: "",
+		},
+		Title:  "",
+		Author: "",
+		NavMap: nil,
 	}
-
-	return n, nil
 }
 
 // TODO: user should not add -1 as filename

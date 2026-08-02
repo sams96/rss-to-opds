@@ -47,14 +47,9 @@ const (
 // New starts writing a new epub
 func New(title string, w io.Writer) (*Epub, error) {
 	var err error
-	e := &Epub{}
-	e.pkg, err = newPackage()
-	if err != nil {
-		return nil, fmt.Errorf("can't create NewEpub: %w", err)
-	}
-	e.toc, err = newToc()
-	if err != nil {
-		return nil, fmt.Errorf("can't create NewEpub: %w", err)
+	e := &Epub{
+		pkg: newPackage(),
+		toc: newToc(),
 	}
 	// Set minimal required attributes
 	e.SetIdentifier(urnUUIDPrefix + uuid.NewString())

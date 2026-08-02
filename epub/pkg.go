@@ -11,26 +11,12 @@ import (
 )
 
 const (
-	pkgAuthorID       = "role"
-	pkgAuthorData     = "aut"
-	pkgAuthorProperty = "role"
-	pkgAuthorRefines  = "#creator"
-	pkgAuthorScheme   = "marc:relators"
-	pkgCreatorID      = "creator"
-	pkgFileTemplate   = `<?xml version="1.0" encoding="UTF-8"?>
-<package version="3.0" unique-identifier="pub-id" xmlns="http://www.idpf.org/2007/opf">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="pub-id"></dc:identifier>
-    <dc:title></dc:title>
-    <dc:language></dc:language>
-    <dc:description></dc:description>
-  </metadata>
-  <manifest>
-  </manifest>
-  <spine toc="ncx">
-  </spine>
-</package>
-`
+	pkgAuthorID         = "role"
+	pkgAuthorData       = "aut"
+	pkgAuthorProperty   = "role"
+	pkgAuthorRefines    = "#creator"
+	pkgAuthorScheme     = "marc:relators"
+	pkgCreatorID        = "creator"
 	pkgModifiedProperty = "dcterms:modified"
 	pkgUniqueIdentifier = "pub-id"
 
@@ -126,24 +112,22 @@ type pkgSpine struct {
 }
 
 // Constructor for pkg
-func newPackage() (*pkg, error) {
-	p := &pkg{
+func newPackage() *pkg {
+	return &pkg{
 		xml: &pkgRoot{
+			Version:          "3.0",
+			UniqueIdentifier: pkgUniqueIdentifier,
 			Metadata: pkgMetadata{
 				XmlnsDc: xmlnsDc,
 				Identifier: pkgIdentifier{
 					ID: pkgUniqueIdentifier,
 				},
 			},
+			Spine: pkgSpine{
+				Toc: "ncx",
+			},
 		},
 	}
-
-	err := xml.Unmarshal([]byte(pkgFileTemplate), &p.xml)
-	if err != nil {
-		return nil, fmt.Errorf("Error unmarshalling package file XML: %w\n"+"\tp.xml=%#v\n"+"\tpkgFileTemplate=%s", err, p.xml, pkgFileTemplate)
-	}
-
-	return p, nil
 }
 
 func (p *pkg) addToManifest(id string, href string, mediaType string, properties string) {

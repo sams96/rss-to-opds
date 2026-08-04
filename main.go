@@ -119,9 +119,8 @@ func (h *handler) feed(w http.ResponseWriter, r *http.Request) {
 
 	for item, err := range yieldStreamItems(resp) {
 		if err != nil {
-			// TODO: return an error in the feed
 			log.ErrorContext(r.Context(), "error reading stream item", slog.String("error", err.Error()))
-			return
+			continue
 		}
 
 		if item.guid == "" {
@@ -172,22 +171,8 @@ func replaceExt(filename, newExt string) string {
 	return name + newExt
 }
 
-type cdataFilterReader struct {
-	r io.Reader
-}
-
-func (c *cdataFilterReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	if n == 0 {
-		return n, err
-	}
-
-	data := p[:n]
-	data = bytes.ReplaceAll(data, []byte("<![CDATA["), nil)
-	data = bytes.ReplaceAll(data, []byte("]]>"), nil)
-
-	copy(p, data)
-	return len(data), err
+func toXMLEntities(input string) string {
+	return html.EscapeString(html.UnescapeString(input))
 }
 
 func (h *handler) download(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +194,6 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	)
 	for item, err := range yieldStreamItems(resp) {
 		if err != nil {
-			// TODO: return an error in the feed
 			log.ErrorContext(r.Context(), "error reading stream item", slog.String("error", err.Error()))
 			return
 		}
@@ -233,7 +217,11 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 
 	var content io.Reader
 	if n := xmlquery.FindOne(targetItem.node, "./content:encoded | ./content | ./description"); n != nil {
-		content = &cdataFilterReader{r: streamContent(r.Context(), n)}
+		if child := n.FirstChild; child != nil && (child.Type == xmlquery.CharDataNode || child.Type == xmlquery.TextNode) {
+			content = strings.NewReader(child.Data)
+		} else {
+			content = strings.NewReader(n.InnerText())
+		}
 	}
 
 	e, err := epub.New(targetItem.title, w)
@@ -286,6 +274,8 @@ loop:
 				token = h.replaceImage(r.Context(), e, token)
 			}
 
+			cleanHTML.WriteString(token.String())
+
 		case html.EndTagToken:
 			switch token.Data {
 			case "br", "hr":
@@ -298,13 +288,15 @@ loop:
 				}
 			}
 
+			cleanHTML.WriteString(token.String())
+
 		case html.TextToken:
 			if inH1 {
 				h1TextBuf.WriteString(token.Data)
 			}
-		}
 
-		cleanHTML.WriteString(token.String())
+			cleanHTML.WriteString(toXMLEntities(token.Data))
+		}
 	}
 
 	if sectionTitle == "Introduction" {
@@ -371,7 +363,10 @@ func (h *handler) replaceImage(ctx context.Context, e *epub.Epub, token html.Tok
 	pathParts := strings.Split(originalSrc, "/")
 	filename := url.PathEscape(replaceExt(pathParts[len(pathParts)-1], ".jpeg"))
 
-	transcoded := transcodeImage(ctx, resp.Body, &imageOptions{maxDimensions: new(1024), greyscale: true})
+	transcoded := transcodeImage(ctx, resp.Body, &imageOptions{
+		maxDimensions: new(1024),
+		greyscale:     true,
+	})
 	e.AddMedia(transcoded, filename, "image/jpeg")
 
 	newAttrs := []html.Attribute{{Key: "src", Val: filename}}

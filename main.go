@@ -266,26 +266,41 @@ loop:
 			switch token.Data {
 			case "br", "hr":
 				continue
+
 			case "h1":
 				flushSection(sectionTitle)
 				inH1 = true
 				h1TextBuf.Reset()
+
 			case "img":
 				token = h.replaceImage(r.Context(), e, token)
+
+			case "source":
+				// drop source tags, epub readers probably just want the img
+				continue
+
+			case "picture":
+				cleanHTML.WriteString("<picture>")
+				continue
 			}
 
 			cleanHTML.WriteString(token.String())
 
 		case html.EndTagToken:
 			switch token.Data {
-			case "br", "hr":
+			case "br", "hr", "source":
 				continue
+
 			case "h1":
 				inH1 = false
 				title := strings.TrimSpace(h1TextBuf.String())
 				if title != "" {
 					sectionTitle = title
 				}
+
+			case "picture":
+				cleanHTML.WriteString("</picture>")
+				continue
 			}
 
 			cleanHTML.WriteString(token.String())
@@ -341,6 +356,13 @@ func (h *handler) replaceImage(ctx context.Context, e *epub.Epub, token html.Tok
 			altText = attr.Val
 		}
 	}
+
+	unescaped, err := url.QueryUnescape(originalSrc)
+	if err != nil {
+		token.Attr = []html.Attribute{{Key: "src", Val: originalSrc}}
+		return token
+	}
+	originalSrc = unescaped
 
 	if !strings.HasPrefix(originalSrc, "http") {
 		token.Attr = []html.Attribute{{Key: "src", Val: originalSrc}}

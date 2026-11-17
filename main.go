@@ -53,9 +53,21 @@ type streamItem struct {
 	updated string
 }
 
+func findChild(n *xmlquery.Node, names ...string) *xmlquery.Node {
+	for _, name := range names {
+		if found := xmlquery.FindOne(n, fmt.Sprintf("./*[local-name()='%s']", name)); found != nil {
+			return found
+		}
+		if found := xmlquery.FindOne(n, "./"+name); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
 func yieldStreamItems(stream io.Reader) iter.Seq2[streamItem, error] {
 	return func(yield func(streamItem, error) bool) {
-		parser, err := xmlquery.CreateStreamParser(stream, "/rss/channel/title | /rss/channel/item")
+		parser, err := xmlquery.CreateStreamParser(stream, "/rss/channel/title | /rss/channel/item | /feed/title | /feed/entry")
 		if err != nil {
 			yield(streamItem{}, err)
 			return
@@ -82,13 +94,13 @@ func yieldStreamItems(stream io.Reader) iter.Seq2[streamItem, error] {
 				continue
 			}
 
-			if n := xmlquery.FindOne(node, "./title"); n != nil {
+			if n := findChild(node, "title"); n != nil {
 				item.title = n.InnerText()
 			}
-			if n := xmlquery.FindOne(node, "./guid | ./id"); n != nil {
+			if n := findChild(node, "guid", "id"); n != nil {
 				item.guid = n.InnerText()
 			}
-			if n := xmlquery.FindOne(node, "./pubDate | ./updated"); n != nil {
+			if n := findChild(node, "pubDate", "updated", "published"); n != nil {
 				item.updated = n.InnerText()
 			}
 
@@ -216,7 +228,7 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var content io.Reader
-	if n := xmlquery.FindOne(targetItem.node, "./content:encoded | ./content | ./description"); n != nil {
+	if n := findChild(targetItem.node, "content:encoded", "content", "description", "summary"); n != nil {
 		if child := n.FirstChild; child != nil && (child.Type == xmlquery.CharDataNode || child.Type == xmlquery.TextNode) {
 			content = strings.NewReader(child.Data)
 		} else {
